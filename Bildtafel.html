@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bildtafel A4 Responsive</title>
+
+<style>
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+body{
+    font-family:Arial, Helvetica, sans-serif;
+    padding:15px;
+    background:#f5f5f5;
+}
+
+.topbar{
+    margin-bottom:15px;
+    display:flex;
+    justify-content:center;
+    gap:10px;
+    flex-wrap:wrap;
+}
+
+button{
+    padding:10px 16px;
+    font-size:16px;
+    cursor:pointer;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:10px;
+    max-width:1200px;
+    margin:auto;
+}
+
+.cell{
+    background:white;
+    border:1px solid #000;
+    padding:8px;
+    display:flex;
+    flex-direction:column;
+}
+
+.image-container{
+    width:100%;
+    border:1px solid #999;
+    background:#efefef;
+    overflow:hidden;
+}
+
+.landscape{ aspect-ratio:4/3; }
+.portrait{ aspect-ratio:3/4; }
+
+.image-container img{
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    display:block;
+}
+
+.caption-display{
+    text-align:center;
+    font-size:14px;
+    min-height:22px;
+    margin-top:6px;
+    font-weight:bold;
+}
+
+.controls{
+    margin-top:8px;
+}
+
+.controls input[type="file"],
+.controls input[type="text"]{
+    width:100%;
+    margin-bottom:6px;
+    padding:5px;
+}
+
+.orientation{
+    display:flex;
+    justify-content:center;
+    gap:20px;
+}
+
+.rotate{
+    display:flex;
+    justify-content:center;
+    flex-wrap:wrap;
+    gap:10px;
+    margin-top:6px;
+}
+
+.rotate button{
+    padding:4px 10px;
+    font-size:13px;
+}
+
+.crop-modal{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.75);
+    z-index:1000;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+}
+
+.crop-modal.active{
+    display:flex;
+}
+
+.crop-box{
+    background:white;
+    padding:15px;
+    max-width:95vw;
+    max-height:95vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:10px;
+}
+
+.crop-box canvas{
+    max-width:80vw;
+    max-height:70vh;
+    touch-action:none;
+    cursor:crosshair;
+    border:1px solid #999;
+}
+
+.crop-actions{
+    display:flex;
+    gap:10px;
+}
+
+/* Responsive */
+@media screen and (max-width:900px){
+    .grid{ grid-template-columns:repeat(2,1fr); }
+}
+
+@media screen and (max-width:600px){
+    .grid{ grid-template-columns:1fr; }
+}
+
+/* Druck */
+@page{
+    size:A4 portrait;
+    margin:8mm;
+}
+
+@media print{
+
+    body{
+        background:white;
+        padding:0;
+    }
+
+    .topbar,
+    .controls,
+    .crop-modal{
+        display:none !important;
+    }
+
+    .grid{
+        grid-template-columns:repeat(3,1fr) !important;
+        gap:2mm;
+    }
+
+    .cell{
+        break-inside:avoid;
+        page-break-inside:avoid;
+        padding:3mm;
+    }
+
+    .caption-display{
+        font-size:11pt;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="topbar">
+    <button onclick="location.reload()">Reset</button>
+    <button onclick="pdfPage()">PDF erstellen / drucken</button>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="crop-modal" id="cropModal">
+    <div class="crop-box">
+        <canvas id="cropCanvas"></canvas>
+        <div class="crop-actions">
+            <button type="button" onclick="applyCrop()">Übernehmen</button>
+            <button type="button" onclick="closeCropModal()">Abbrechen</button>
+        </div>
+    </div>
+</div>
+
+<script>
+
+const grid = document.getElementById("grid");
+
+for(let i=1;i<=12;i++){
+
+    const cell = document.createElement("div");
+    cell.className="cell";
+
+    cell.innerHTML=`
+        <div class="image-container landscape" id="imgContainer${i}">
+            <img id="img${i}">
+        </div>
+
+        <div class="caption-display" id="caption${i}"></div>
+
+        <div class="controls">
+
+            <input type="file" accept="image/*"
+                onchange="loadImage(event,${i})">
+
+            <input type="text" maxlength="100"
+                placeholder="Text eingeben"
+                oninput="updateCaption(${i},this.value)">
+
+            <div class="orientation">
+
+                <label>
+                    <input type="radio" name="o${i}" checked
+                        onchange="setOrientation(${i},'landscape')">
+                    Quer
+                </label>
+
+                <label>
+                    <input type="radio" name="o${i}"
+                        onchange="setOrientation(${i},'portrait')">
+                    Hoch
+                </label>
+
+            </div>
+
+            <div class="rotate">
+                <button type="button" onclick="rotateImage(${i},-90)">⟲ Links</button>
+                <button type="button" onclick="rotateImage(${i},90)">⟳ Rechts</button>
+                <button type="button" onclick="openCropModal(${i})">✂ Zuschneiden</button>
+            </div>
+
+        </div>
+    `;
+
+    grid.appendChild(cell);
+}
+
+const imageStates={};
+
+function loadImage(event,id){
+    const file=event.target.files[0];
+    if(!file) return;
+
+    const reader=new FileReader();
+    reader.onload=e=>{
+        imageStates[id]={src:e.target.result, rotation:0};
+        renderImage(id);
+    };
+    reader.readAsDataURL(file);
+}
+
+function renderImage(id){
+    const state=imageStates[id];
+    if(!state) return;
+
+    const img=new Image();
+    img.onload=()=>{
+        const swap=state.rotation%180!==0;
+        const canvas=document.createElement("canvas");
+        canvas.width=swap?img.height:img.width;
+        canvas.height=swap?img.width:img.height;
+
+        const ctx=canvas.getContext("2d");
+        ctx.translate(canvas.width/2,canvas.height/2);
+        ctx.rotate(state.rotation*Math.PI/180);
+        ctx.drawImage(img,-img.width/2,-img.height/2);
+
+        document.getElementById("img"+id).src=canvas.toDataURL("image/png");
+    };
+    img.src=state.src;
+}
+
+function rotateImage(id,delta){
+    const state=imageStates[id];
+    if(!state) return;
+    state.rotation=(state.rotation+delta+360)%360;
+    renderImage(id);
+}
+
+const cropModal=document.getElementById("cropModal");
+const cropCanvas=document.getElementById("cropCanvas");
+const cropCtx=cropCanvas.getContext("2d");
+
+let cropId=null;
+let cropImg=null;
+let cropRect=null;
+let cropDragging=false;
+let cropStart=null;
+
+function openCropModal(id){
+    const state=imageStates[id];
+    if(!state) return;
+
+    cropId=id;
+    cropRect=null;
+
+    const img=new Image();
+    img.onload=()=>{
+        cropImg=img;
+        cropCanvas.width=img.width;
+        cropCanvas.height=img.height;
+        drawCropCanvas();
+        cropModal.classList.add("active");
+    };
+    img.src=document.getElementById("img"+id).src;
+}
+
+function drawCropCanvas(){
+    cropCtx.clearRect(0,0,cropCanvas.width,cropCanvas.height);
+    cropCtx.drawImage(cropImg,0,0);
+
+    if(!cropRect) return;
+
+    cropCtx.fillStyle="rgba(0,0,0,0.5)";
+    cropCtx.fillRect(0,0,cropCanvas.width,cropCanvas.height);
+
+    cropCtx.save();
+    cropCtx.beginPath();
+    cropCtx.rect(cropRect.x,cropRect.y,cropRect.w,cropRect.h);
+    cropCtx.clip();
+    cropCtx.drawImage(cropImg,0,0);
+    cropCtx.restore();
+
+    cropCtx.strokeStyle="#fff";
+    cropCtx.lineWidth=2;
+    cropCtx.strokeRect(cropRect.x,cropRect.y,cropRect.w,cropRect.h);
+}
+
+function cropPointerPos(e){
+    const rect=cropCanvas.getBoundingClientRect();
+    const scaleX=cropCanvas.width/rect.width;
+    const scaleY=cropCanvas.height/rect.height;
+    return{
+        x:Math.min(Math.max((e.clientX-rect.left)*scaleX,0),cropCanvas.width),
+        y:Math.min(Math.max((e.clientY-rect.top)*scaleY,0),cropCanvas.height)
+    };
+}
+
+cropCanvas.addEventListener("pointerdown",e=>{
+    if(!cropImg) return;
+    cropDragging=true;
+    cropStart=cropPointerPos(e);
+    cropRect={x:cropStart.x,y:cropStart.y,w:0,h:0};
+    cropCanvas.setPointerCapture(e.pointerId);
+});
+
+cropCanvas.addEventListener("pointermove",e=>{
+    if(!cropDragging) return;
+    const pos=cropPointerPos(e);
+    cropRect={
+        x:Math.min(cropStart.x,pos.x),
+        y:Math.min(cropStart.y,pos.y),
+        w:Math.abs(pos.x-cropStart.x),
+        h:Math.abs(pos.y-cropStart.y)
+    };
+    drawCropCanvas();
+});
+
+cropCanvas.addEventListener("pointerup",()=>{
+    cropDragging=false;
+});
+
+function applyCrop(){
+    if(!cropRect || cropRect.w<5 || cropRect.h<5){
+        alert("Bitte einen Bereich zum Zuschneiden auswählen.");
+        return;
+    }
+
+    const canvas=document.createElement("canvas");
+    canvas.width=cropRect.w;
+    canvas.height=cropRect.h;
+
+    const ctx=canvas.getContext("2d");
+    ctx.drawImage(cropImg,cropRect.x,cropRect.y,cropRect.w,cropRect.h,0,0,cropRect.w,cropRect.h);
+
+    imageStates[cropId]={src:canvas.toDataURL("image/png"), rotation:0};
+    renderImage(cropId);
+    closeCropModal();
+}
+
+function closeCropModal(){
+    cropModal.classList.remove("active");
+    cropId=null;
+    cropImg=null;
+    cropRect=null;
+    cropDragging=false;
+}
+
+function updateCaption(id,text){
+    document.getElementById("caption"+id).textContent=text;
+}
+
+function setOrientation(id,mode){
+    const el=document.getElementById("imgContainer"+id);
+    el.classList.remove("landscape","portrait");
+    el.classList.add(mode);
+}
+
+function printPage(){
+    setTimeout(()=>window.print(),100);
+}
+
+function pdfPage(){
+    setTimeout(()=>window.print(),100);
+}
+
+</script>
+
+</body>
+</html>
